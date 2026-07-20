@@ -18,8 +18,8 @@ func NewSecretEphemeralResource() ephemeral.EphemeralResource {
 
 type secretEphemeralResource struct{}
 
-// Config = what the user writes in the ephemeral block
-// Result = what Open returns; consumable but never persisted to state/plan
+// Config = what the user writes in the ephemeral block.
+// Result = what Open returns; consumable but never persisted to state/plan.
 type secretModel struct {
 	Ciphertext  types.String `tfsdk:"ciphertext"`
 	SecretKey   types.String `tfsdk:"secret_key"`
@@ -67,7 +67,7 @@ func (r *secretEphemeralResource) Open(ctx context.Context, req ephemeral.OpenRe
 		return
 	}
 
-	// Which env var holds the passphrase for THIS secret. Defaults to SECRET_KEY
+	// Which env var holds the passphrase for THIS secret. Defaults to SECRET_KEY.
 	envName := data.SecretKey.ValueString()
 	if envName == "" {
 		envName = "SECRET_KEY"
@@ -92,5 +92,5 @@ func (r *secretEphemeralResource) Open(ctx context.Context, req ephemeral.OpenRe
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 
 	// No RenewAt / no private data: the value is derived deterministically from
-	// config + env each time, so there's nothing to renew or clean up in Close
+	// config + env each time, so there's nothing to renew or clean up in Close.
 }

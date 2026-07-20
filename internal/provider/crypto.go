@@ -15,7 +15,7 @@ import (
 // Wire format: "SECRET1;" + base64( salt(16) || nonce(12) || ciphertext+tag )
 //
 // Key derivation: scrypt(passphrase, salt, N=2^15, r=8, p=1) -> 32 bytes (AES-256).
-// AEAD: AES-256-GCM. GCM tag is appended to ciphertext by Seal (standard Go behaviour)
+// AEAD: AES-256-GCM. GCM tag is appended to ciphertext by Seal (standard Go behavior).
 
 const (
 	magicPrefix = "SECRET1;"
@@ -98,7 +98,7 @@ func Decrypt(passphrase, wire string) (string, error) {
 	}
 	plaintext, err := gcm.Open(nil, nonce, sealed, nil)
 	if err != nil {
-		// Wrong key or tampered ciphertext both land here
+		// Wrong key or tampered ciphertext both land here.
 		return "", errors.New("decryption failed: wrong key or corrupted ciphertext")
 	}
 	return string(plaintext), nil

@@ -1,4 +1,4 @@
-// secret-encrypt: turn a plaintext into a SECRET1;... value you can commit
+// secret-encrypt: turn a plaintext into a SECRET1;... value you can commit.
 //
 // The passphrase is read from an environment variable whose name you pass with
 // -secret-key (default "SECRET_KEY"), matching the ephemeral resource's

@@ -18,7 +18,8 @@ func main() {
 	flag.Parse()
 
 	err := providerserver.Serve(context.Background(), provider.New(version), providerserver.ServeOpts{
-		Address: "registry.terraform.io/szandala/secret",
+		// This must match the source address users put in required_providers.
+		Address: "registry.terraform.io/yourname/secret",
 		Debug:   debug,
 	})
 	if err != nil {

@@ -31,8 +31,8 @@ func (p *secretProvider) Metadata(_ context.Context, _ provider.MetadataRequest,
 
 func (p *secretProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	// No provider-level config needed: each secret names its own key env var
-	// via the secret_key attribute (default SECRET_KEY),
-	// so the provider block stays empty
+	// via the secret_key attribute (default SECRET_KEY), so the provider block
+	// stays empty.
 	resp.Schema = schema.Schema{
 		Description: "Commit AES-256-GCM encrypted secrets to your repo and decrypt them on-the-fly during plan/apply. Each secret names the environment variable holding its key via secret_key (default SECRET_KEY), so different secrets can use different keys. Decrypted values never touch state (ephemeral).",
 	}
