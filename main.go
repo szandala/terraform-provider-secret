@@ -6,7 +6,7 @@ import (
 	"log"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
-	"github.com/yourname/terraform-provider-secret/internal/provider"
+	"github.com/szandala/terraform-provider-secret/internal/provider"
 )
 
 // Set by goreleaser at build time.
@@ -19,7 +19,7 @@ func main() {
 
 	err := providerserver.Serve(context.Background(), provider.New(version), providerserver.ServeOpts{
 		// This must match the source address users put in required_providers.
-		Address: "registry.terraform.io/yourname/secret",
+		Address: "registry.terraform.io/szandala/secret",
 		Debug:   debug,
 	})
 	if err != nil {

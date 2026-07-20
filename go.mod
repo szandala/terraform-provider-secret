@@ -1,4 +1,4 @@
-module github.com/yourname/terraform-provider-secret
+module github.com/szandala/terraform-provider-secret
 
 go 1.22.0
 
