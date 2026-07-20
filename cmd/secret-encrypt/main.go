@@ -5,12 +5,13 @@
 // secret_key attribute at runtime.
 //
 // Usage:
-//   export SECRET_KEY='my passphrase'
-//   echo -n 'super secret' | secret-encrypt
-//   secret-encrypt -value 'super secret'
 //
-//   export PROD_SECRET_KEY='prod passphrase'
-//   secret-encrypt -secret-key PROD_SECRET_KEY -value 'prod secret'
+//	export SECRET_KEY='my passphrase'
+//	echo -n 'super secret' | secret-encrypt
+//	secret-encrypt -value 'super secret'
+//
+//	export PROD_SECRET_KEY='prod passphrase'
+//	secret-encrypt -secret-key PROD_SECRET_KEY -value 'prod secret'
 package main
 
 import (
