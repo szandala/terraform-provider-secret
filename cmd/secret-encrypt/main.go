@@ -21,7 +21,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/yourname/terraform-provider-secret/internal/provider"
+	"github.com/szandala/terraform-provider-secret/internal/provider"
 )
 
 func main() {

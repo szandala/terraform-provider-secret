@@ -38,7 +38,7 @@ func TestProvider_RegistersEphemeralResource(t *testing.T) {
 func TestSecretResource_Metadata(t *testing.T) {
 	r := NewSecretEphemeralResource()
 	resp := &ephemeral.MetadataResponse{}
-	// ProviderTypeName is intentionally ignored — we force the bare "secret".
+	// ProviderTypeName is intentionally ignored - we force the bare "secret".
 	r.Metadata(context.Background(), ephemeral.MetadataRequest{ProviderTypeName: "secret"}, resp)
 
 	if resp.TypeName != "secret" {

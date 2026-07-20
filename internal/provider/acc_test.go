@@ -25,7 +25,7 @@ var protoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, erro
 
 // The echo provider (from terraform-plugin-testing) lets us pull an ephemeral
 // value into state SOLELY for assertions. In real use nothing echoes the value,
-// so it never reaches state — that's the whole guarantee. Here we deliberately
+// so it never reaches state - that's the whole guarantee. Here we deliberately
 // echo it so we can assert the decrypted plaintext is correct.
 var echoFactory = map[string]func() (tfprotov6.ProviderServer, error){
 	"echo": echoprovider.NewProviderServer(),

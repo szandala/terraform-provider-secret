@@ -4,7 +4,7 @@ An `ansible-vault`-style secrets mechanism for Terraform / OpenTofu.
 
 - Commit **encrypted** values to your repo.
 - Decrypt **on-the-fly** during `plan` / `apply`.
-- The decrypted value is **ephemeral** — it never lands in state or plan.
+- The decrypted value is **ephemeral** - it never lands in state or plan.
 - Each secret picks **which env var holds its key**, so you can mix keys
   (per-env, per-team) in one config.
 
@@ -16,7 +16,7 @@ Works on Terraform >= 1.10 or OpenTofu >= 1.7 (ephemeral resources required).
 `scrypt` from a passphrase held in an environment variable. The variable's **name**
 is given per-secret by `secret_key` (default `SECRET_KEY`). Because it's an
 **ephemeral resource**, Terraform core guarantees the result is never serialized to
-state or the plan file — you don't fork core, you lean on the ephemeral value
+state or the plan file - you don't fork core, you lean on the ephemeral value
 lifecycle already in core.
 
 ## Wire format
@@ -44,7 +44,7 @@ export PROD_SECRET_KEY='prod passphrase'
 ```hcl
 terraform {
   required_providers {
-    secret = { source = "yourname/secret" }
+    secret = { source = "szandala/secret" }
   }
 }
 
@@ -53,7 +53,7 @@ ephemeral "secret" "db_password" {
   ciphertext = "SECRET1;U2FsdGVk..."
 }
 
-# Uses a different key — good for per-environment secrets:
+# Uses a different key - good for per-environment secrets:
 ephemeral "secret" "prod_db_password" {
   ciphertext  = "SECRET1;Zm9vYmFy..."
   secret_key  = "PROD_SECRET_KEY"
@@ -97,7 +97,7 @@ TF_ACC=1 go test -tags acc -v ./internal/provider/
 ```
 
 They use the `echo` provider from `terraform-plugin-testing` to pull the
-ephemeral value into state *for assertion only* — proof that decryption works,
+ephemeral value into state _for assertion only_ - proof that decryption works,
 while in normal use nothing echoes it and it never lands in state.
 
 ## Where you can safely use `.plaintext` (important)
@@ -105,18 +105,18 @@ while in normal use nothing echoes it and it never lands in state.
 The ephemeral resource guarantees only one thing: the decrypted value itself is
 never written to state or plan. It does **not** protect the value once you hand it
 to another resource. If you assign `.plaintext` to an ordinary (state-persisted)
-attribute, the *target resource* would write it into state in cleartext — so
+attribute, the _target resource_ would write it into state in cleartext - so
 Terraform **refuses** it outright with an `Invalid use of ephemeral value` error.
 There is no silent leak and no way to force one; you either use an
 ephemeral-friendly sink or Terraform stops you.
 
 So the decrypted value can go into exactly three kinds of places:
 
-### 1. Write-only (`*_wo`) resource arguments — the main pattern
+### 1. Write-only (`*_wo`) resource arguments - the main pattern
 
 Many providers expose a write-only twin of a sensitive field (e.g. `secret_data`
 → `secret_data_wo`). Write-only arguments are sent to the provider's API and then
-forgotten — they are **not** stored in state. Pair each with its `*_wo_version`
+forgotten - they are **not** stored in state. Pair each with its `*_wo_version`
 counter; bump the version when you rotate the secret so the provider re-sends it.
 
 GCP Secret Manager is the textbook case:
@@ -140,7 +140,7 @@ resource "google_secret_manager_secret_version" "db" {
 ```
 
 Nothing about the password reaches state here. Check the provider docs
-per-attribute — an argument only qualifies if it actually has a `*_wo` form.
+per-attribute - an argument only qualifies if it actually has a `*_wo` form.
 
 ### 2. Provider configuration
 
@@ -157,9 +157,9 @@ provider "postgresql" {
 You can chain an ephemeral value into another ephemeral construct without it ever
 becoming durable.
 
-## Where it does NOT help — and why
+## Where it does NOT help - and why
 
-Some fields are cleartext *by their own nature*, and no encryption-at-rest trick
+Some fields are cleartext _by their own nature_, and no encryption-at-rest trick
 changes that. The clearest example is a VM startup script
 (`metadata_startup_script`, `user_data`, cloud-init):
 
@@ -186,13 +186,13 @@ transport, not a destination that is inherently cleartext.
 
 ### The right pattern for VMs
 
-Don't push the secret *into* the machine. Store it once via a `*_wo` sink
+Don't push the secret _into_ the machine. Store it once via a `*_wo` sink
 (Secret Manager, above) and have the VM **pull it at boot** using its own identity
 (GCP service account / AWS instance role):
 
 ```hcl
 resource "google_compute_instance" "vm" {
-  # startup script contains NO secret — just a fetch command:
+  # startup script contains NO secret - just a fetch command:
   metadata_startup_script = <<-EOT
     #!/bin/bash
     gcloud secrets versions access latest \
@@ -212,10 +212,10 @@ own IAM identity. Terraform state never sees the cleartext at any step.
 
 ## Quick reference
 
-| Sink                                              | Safe?  | Why |
-|---------------------------------------------------|--------|-----|
-| `*_wo` argument (e.g. `secret_data_wo`)           | ✅     | Not persisted to state |
-| Provider config (e.g. DB `password`)              | ✅     | Ephemeral-aware, not persisted |
-| Another ephemeral resource / local                | ✅     | Stays ephemeral |
-| Ordinary attribute (most fields)                  | ❌     | Terraform errors; would otherwise leak to state |
-| VM startup script / user-data / metadata          | ❌     | Cleartext at the cloud destination anyway — have the VM pull the secret instead |
+| Sink                                     | Safe? | Why                                                                             |
+| ---------------------------------------- | ----- | ------------------------------------------------------------------------------- |
+| `*_wo` argument (e.g. `secret_data_wo`)  | ✅    | Not persisted to state                                                          |
+| Provider config (e.g. DB `password`)     | ✅    | Ephemeral-aware, not persisted                                                  |
+| Another ephemeral resource / local       | ✅    | Stays ephemeral                                                                 |
+| Ordinary attribute (most fields)         | ❌    | Terraform errors; would otherwise leak to state                                 |
+| VM startup script / user-data / metadata | ❌    | Cleartext at the cloud destination anyway - have the VM pull the secret instead |
