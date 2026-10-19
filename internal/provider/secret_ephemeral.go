@@ -7,16 +7,23 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-var _ ephemeral.EphemeralResource = &secretEphemeralResource{}
+var (
+	_ ephemeral.EphemeralResource              = &secretEphemeralResource{}
+	_ ephemeral.EphemeralResourceWithConfigure = &secretEphemeralResource{}
+)
 
 func NewSecretEphemeralResource() ephemeral.EphemeralResource {
 	return &secretEphemeralResource{}
 }
 
-type secretEphemeralResource struct{}
+type secretEphemeralResource struct {
+	defaultSecretKey string
+	configured       bool
+}
 
 // Config = what the user writes in the ephemeral block.
 // Result = what Open returns; consumable but never persisted to state/plan.
@@ -28,11 +35,8 @@ type secretModel struct {
 }
 
 func (r *secretEphemeralResource) Metadata(_ context.Context, req ephemeral.MetadataRequest, resp *ephemeral.MetadataResponse) {
-	// Bare "secret" rather than the conventional providerTypeName + "_secret"
-	// (which would be "secret_secret"). Terraform only requires the type to be
-	// prefixed by the provider name, and "secret" satisfies that against the
-	// "secret" provider, so this is accepted.
-	resp.TypeName = "secret"
+	// Conventional <provider>_<name>: "secret_secret".
+	resp.TypeName = req.ProviderTypeName + "_secret"
 }
 
 func (r *secretEphemeralResource) Schema(_ context.Context, _ ephemeral.SchemaRequest, resp *ephemeral.SchemaResponse) {
@@ -40,12 +44,16 @@ func (r *secretEphemeralResource) Schema(_ context.Context, _ ephemeral.SchemaRe
 		Description: "Decrypts an AES-256-GCM encrypted value on-the-fly. The plaintext is ephemeral and never written to state or plan.",
 		Attributes: map[string]schema.Attribute{
 			"ciphertext": schema.StringAttribute{
-				Required:    true,
-				Description: "The 'SECRET1;...' encrypted value. Safe to commit to your repository.",
+				Required: true,
+				Description: "The 'SECRET1;...' encrypted value. Safe to commit to your repository. Whitespace is ignored, " +
+					"so the value may be wrapped across lines or loaded with file().",
+				Validators: []validator.String{ciphertextValidator{}},
 			},
 			"secret_key": schema.StringAttribute{
-				Optional:    true,
-				Description: "Name of the environment variable that holds the passphrase for this secret (e.g. \"SECRET_KEY\", \"PROD_SECRET_KEY\", or \"TF_VAR_app_key\"). Defaults to \"SECRET_KEY\" if omitted.",
+				Optional: true,
+				Description: "Name of the environment variable that holds the passphrase for this secret (e.g. \"PROD_SECRET_KEY\"). " +
+					"Defaults to the provider's secret_key, which defaults to \"SECRET_KEY\".",
+				Validators: []validator.String{envVarNameValidator{}},
 			},
 			"description": schema.StringAttribute{
 				Optional:    true,
@@ -60,6 +68,22 @@ func (r *secretEphemeralResource) Schema(_ context.Context, _ ephemeral.SchemaRe
 	}
 }
 
+func (r *secretEphemeralResource) Configure(_ context.Context, req ephemeral.ConfigureRequest, resp *ephemeral.ConfigureResponse) {
+	if req.ProviderData == nil {
+		return
+	}
+	data, ok := req.ProviderData.(*providerData)
+	if !ok {
+		resp.Diagnostics.AddError(
+			"Unexpected provider data",
+			fmt.Sprintf("Expected *providerData, got %T. Please report this issue to the provider developers.", req.ProviderData),
+		)
+		return
+	}
+	r.defaultSecretKey = data.defaultSecretKey
+	r.configured = true
+}
+
 func (r *secretEphemeralResource) Open(ctx context.Context, req ephemeral.OpenRequest, resp *ephemeral.OpenResponse) {
 	var data secretModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
@@ -67,10 +91,22 @@ func (r *secretEphemeralResource) Open(ctx context.Context, req ephemeral.OpenRe
 		return
 	}
 
-	// Which env var holds the passphrase for THIS secret. Defaults to SECRET_KEY.
+	// Which env var holds the passphrase for THIS secret:
+	// resource secret_key > provider secret_key > SECRET_KEY.
 	envName := data.SecretKey.ValueString()
 	if envName == "" {
-		envName = "SECRET_KEY"
+		envName = defaultSecretKey
+		if r.configured {
+			envName = r.defaultSecretKey
+		}
+	}
+	if envName == "" {
+		resp.Diagnostics.AddError(
+			"Decryption key variable unknown",
+			"The provider's secret_key is not known yet. Set secret_key to a literal string, "+
+				"either in the provider block or on this secret.",
+		)
+		return
 	}
 
 	passphrase, ok := os.LookupEnv(envName)
@@ -84,7 +120,10 @@ func (r *secretEphemeralResource) Open(ctx context.Context, req ephemeral.OpenRe
 
 	plaintext, err := Decrypt(passphrase, data.Ciphertext.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to decrypt secret", err.Error())
+		resp.Diagnostics.AddError(
+			"Failed to decrypt secret",
+			fmt.Sprintf("Using the passphrase from %q: %s", envName, err),
+		)
 		return
 	}
 

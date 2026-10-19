@@ -138,3 +138,86 @@ func TestEncrypt_UniqueSaltAndNonce(t *testing.T) {
 		}
 	}
 }
+
+func TestDecrypt_IgnoresWhitespaceAndWrapping(t *testing.T) {
+	wire, err := Encrypt("key", "KEY1=a\nKEY2=b\n")
+	if err != nil {
+		t.Fatalf("Encrypt failed: %v", err)
+	}
+	variants := map[string]string{
+		"trailing newline (file())": wire + "\n",
+		"crlf":                      wire + "\r\n",
+		"wrapped at 20":             WrapCiphertext(wire, 20),
+		"indented heredoc":          "  " + strings.ReplaceAll(WrapCiphertext(wire, 30), "\n", "\n  ") + "\n",
+	}
+	for name, v := range variants {
+		t.Run(name, func(t *testing.T) {
+			got, err := Decrypt("key", v)
+			if err != nil {
+				t.Fatalf("Decrypt failed: %v", err)
+			}
+			if got != "KEY1=a\nKEY2=b\n" {
+				t.Fatalf("got %q", got)
+			}
+		})
+	}
+}
+
+func TestWrapCiphertext(t *testing.T) {
+	wire, err := Encrypt("key", strings.Repeat("x", 200))
+	if err != nil {
+		t.Fatalf("Encrypt failed: %v", err)
+	}
+	wrapped := WrapCiphertext(wire, 64)
+	for i, line := range strings.Split(wrapped, "\n") {
+		if len(line) > 64 {
+			t.Fatalf("line %d is %d chars, want <= 64", i, len(line))
+		}
+	}
+	if NormalizeCiphertext(wrapped) != wire {
+		t.Fatal("unwrapping did not restore the original wire string")
+	}
+	if WrapCiphertext(wire, 0) != wire {
+		t.Fatal("width 0 must not wrap")
+	}
+}
+
+func TestEncrypt_RejectsInvalidUTF8(t *testing.T) {
+	if _, err := Encrypt("key", string([]byte{0xff, 0xfe, 0x00})); err == nil {
+		t.Fatal("expected error for non-UTF-8 plaintext, got nil")
+	}
+}
+
+func TestValidateCiphertext(t *testing.T) {
+	wire, err := Encrypt("key", "v")
+	if err != nil {
+		t.Fatalf("Encrypt failed: %v", err)
+	}
+	if err := ValidateCiphertext(wire); err != nil {
+		t.Fatalf("valid ciphertext rejected: %v", err)
+	}
+	for _, bad := range []string{"", "p@ssw0rd", magicPrefix, magicPrefix + "!!!", wire[:20]} {
+		if err := ValidateCiphertext(bad); err == nil {
+			t.Errorf("expected %q to be rejected", bad)
+		}
+	}
+}
+
+func TestWriteOnlyVersion(t *testing.T) {
+	a, _ := Encrypt("key", "same")
+	b, _ := Encrypt("key", "same")
+
+	va := WriteOnlyVersion(a)
+	if va <= 0 || va >= 1<<53 {
+		t.Fatalf("version %d out of range (0, 2^53)", va)
+	}
+	if WriteOnlyVersion(a) != va {
+		t.Fatal("version is not deterministic")
+	}
+	if WriteOnlyVersion(WrapCiphertext(a, 10)+"\n") != va {
+		t.Fatal("version must ignore whitespace / wrapping")
+	}
+	if WriteOnlyVersion(b) == va {
+		t.Fatal("re-encrypting must change the version")
+	}
+}
