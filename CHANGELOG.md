@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased (next 0.x minor)
+## Unreleased
+
+### Added
+
+- Pluggable encryption methods, chosen with `secret-encrypt --method` and
+  detected from the ciphertext prefix when decrypting:
+  - `aes256` (`AES256;`): AES-256-GCM + scrypt. Default.
+  - `xchacha20` (`XCHACHA20;`): XChaCha20-Poly1305 + Argon2id (64 MiB).
+  - `age1` (`AGE1;`): asymmetric age X25519. Encrypt with public key(s),
+    decrypt with the private key. Decrypting with a public key gives an
+    explicit error instead of a generic failure.
+- Templates for new methods: `internal/provider/method_template_symmetric.go`
+  and `method_template_asymmetric.go`; generic tests cover every registered
+  method.
+- `secret-encrypt --genkey` (random passphrase, or age key pair) and
+  `--version`.
+- Release assets: `secret-encrypt_<version>_<os>_<arch>` archives for
+  linux/darwin/windows (amd64, arm64) plus `secret-encrypt_<version>_SHA256SUMS`.
+  The provider's own SHA256SUMS is unchanged.
+
+### Changed
+
+- The default prefix is now `AES256;` instead of `SECRET1;`. Same algorithm;
+  existing `SECRET1;` values keep decrypting, nothing needs re-encrypting.
+- Symmetric methods refuse an age key in the key variable with a hint to use
+  `--method age1`.
+- New dependency: `filippo.io/age`.
+- `.gitignore`: binaries are ignored only in the repo root (the old pattern
+  also matched the `cmd/secret-encrypt/` directory).
+
+## 0.x - rename to secret_secret
 
 ### BREAKING
 

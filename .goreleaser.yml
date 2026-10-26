@@ -1,6 +1,10 @@
 # GoReleaser config for a Terraform provider.
 # Produces the multi-platform archives, SHA256SUMS, and GPG signature that the
-# Terraform Registry expects. Build only the provider binary, not the CLI helper.
+# Terraform Registry expects, plus separate archives of the secret-encrypt CLI.
+#
+# The CLI archives are deliberately NOT in the provider's SHA256SUMS (see
+# checksum.ids), so the files the Registry consumes stay exactly as before.
+# release.yml uploads a separate secret-encrypt_<version>_SHA256SUMS.
 version: 2
 
 before:
@@ -30,13 +34,41 @@ builds:
       - goos: darwin
         goarch: "386"
 
+  - id: secret-encrypt
+    main: ./cmd/secret-encrypt
+    binary: secret-encrypt
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - "-s -w -X main.version={{ .Version }}"
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
 archives:
-  - format: zip
+  - id: provider
+    ids: [provider]
+    formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  - id: secret-encrypt
+    ids: [secret-encrypt]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "secret-encrypt_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
   algorithm: sha256
+  ids: [provider]
 
 signs:
   - artifacts: checksum

@@ -34,7 +34,7 @@ func (f *writeOnlyVersionFunction) Definition(_ context.Context, _ function.Defi
 		Parameters: []function.Parameter{
 			function.StringParameter{
 				Name:        "ciphertext",
-				Description: "The SECRET1;... value (the same one passed to secret_secret).",
+				Description: "The encrypted value (the same one passed to secret_secret).",
 			},
 		},
 		Return: function.Int64Return{},

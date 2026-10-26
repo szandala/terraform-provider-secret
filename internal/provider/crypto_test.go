@@ -6,144 +6,251 @@ import (
 	"testing"
 )
 
-func TestEncryptDecrypt_RoundTrip(t *testing.T) {
-	cases := []struct {
-		name       string
-		passphrase string
-		plaintext  string
-	}{
-		{"simple", "correct horse battery staple", "p@ssw0rd"},
-		{"empty plaintext", "key", ""},
-		{"unicode", "hasło", "zażółć gęślą jaźń 🔐"},
-		{"long", strings.Repeat("k", 128), strings.Repeat("secret-", 1000)},
-		{"whitespace", "key with spaces", "  leading and trailing  "},
-		{"newlines", "key", "line1\nline2\nline3"},
+const testPassphrase = "correct horse battery staple"
+
+// methodTestKeys returns (key to encrypt, key to decrypt) for a method.
+// Every registered method MUST have a case here; the generic tests below then
+// cover it automatically.
+func methodTestKeys(t *testing.T, m Method) (string, string) {
+	t.Helper()
+	switch m.Name() {
+	case "aes256", "xchacha20":
+		return testPassphrase, testPassphrase
+	case "age1":
+		secret, public, err := m.GenerateKey()
+		if err != nil {
+			t.Fatalf("GenerateKey: %v", err)
+		}
+		return public, secret
+	default:
+		t.Fatalf("method %q has no case in methodTestKeys (crypto_test.go)", m.Name())
+		return "", ""
 	}
+}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			wire, err := Encrypt(tc.passphrase, tc.plaintext)
-			if err != nil {
-				t.Fatalf("Encrypt failed: %v", err)
-			}
-			if !strings.HasPrefix(wire, magicPrefix) {
-				t.Fatalf("wire output missing %q prefix: %q", magicPrefix, wire)
-			}
+func mustEncryptWith(t *testing.T, method, key, plaintext string) string {
+	t.Helper()
+	wire, err := Encrypt(method, key, plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt(%s): %v", method, err)
+	}
+	return wire
+}
 
-			got, err := Decrypt(tc.passphrase, wire)
-			if err != nil {
-				t.Fatalf("Decrypt failed: %v", err)
+func TestMethods_Registered(t *testing.T) {
+	want := map[string]bool{"aes256": false, "xchacha20": false, "age1": false}
+	for _, m := range Methods() {
+		if m.Prefix() != strings.ToUpper(m.Name())+";" {
+			t.Errorf("%s: prefix %q breaks the ToUpper(name)+\";\" convention", m.Name(), m.Prefix())
+		}
+		want[m.Name()] = true
+	}
+	for name, ok := range want {
+		if !ok {
+			t.Errorf("method %q not registered", name)
+		}
+	}
+	if _, err := LookupMethod(DefaultMethod); err != nil {
+		t.Fatalf("default method not registered: %v", err)
+	}
+	if _, err := LookupMethod("rot13"); err == nil || !strings.Contains(err.Error(), "available") {
+		t.Fatalf("unknown method error should list available methods, got %v", err)
+	}
+}
+
+func TestMethods_RoundTrip(t *testing.T) {
+	cases := map[string]string{
+		"simple":   "p@ssw0rd",
+		"empty":    "",
+		"unicode":  "zażółć gęślą jaźń 🔐",
+		"newlines": "-----BEGIN CERTIFICATE-----\nMIIB\n\n-----END CERTIFICATE-----\n",
+	}
+	for _, m := range Methods() {
+		enc, dec := methodTestKeys(t, m)
+		for name, plaintext := range cases {
+			t.Run(m.Name()+"/"+name, func(t *testing.T) {
+				wire := mustEncryptWith(t, m.Name(), enc, plaintext)
+				if !strings.HasPrefix(wire, m.Prefix()) {
+					t.Fatalf("missing %q prefix", m.Prefix())
+				}
+				if err := ValidateCiphertext(wire); err != nil {
+					t.Fatalf("ValidateCiphertext: %v", err)
+				}
+				got, err := Decrypt(dec, wire)
+				if err != nil {
+					t.Fatalf("Decrypt: %v", err)
+				}
+				if got != plaintext {
+					t.Fatalf("got %q, want %q", got, plaintext)
+				}
+			})
+		}
+	}
+}
+
+func TestMethods_WrongKeyFails(t *testing.T) {
+	for _, m := range Methods() {
+		t.Run(m.Name(), func(t *testing.T) {
+			enc, _ := methodTestKeys(t, m)
+			_, otherDec := methodTestKeys(t, m)
+			if !m.Asymmetric() {
+				otherDec = "a different passphrase"
 			}
-			if got != tc.plaintext {
-				t.Fatalf("round-trip mismatch: got %q, want %q", got, tc.plaintext)
+			wire := mustEncryptWith(t, m.Name(), enc, "secret value")
+			_, err := Decrypt(otherDec, wire)
+			if err == nil || !strings.Contains(err.Error(), "decryption failed") {
+				t.Fatalf("expected a decryption failure, got %v", err)
 			}
 		})
 	}
 }
 
-func TestDecrypt_WrongPassphrase(t *testing.T) {
-	wire, err := Encrypt("right key", "secret value")
-	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
-	}
-
-	_, err = Decrypt("wrong key", wire)
-	if err == nil {
-		t.Fatal("expected error decrypting with wrong passphrase, got nil")
-	}
-	// Must not leak whether it was key vs corruption in a distinguishable way.
-	if !strings.Contains(err.Error(), "decryption failed") {
-		t.Fatalf("unexpected error message: %v", err)
-	}
-}
-
-func TestDecrypt_EmptyPassphrase(t *testing.T) {
-	wire, err := Encrypt("some key", "value")
-	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
-	}
-	if _, err := Decrypt("", wire); err == nil {
-		t.Fatal("expected error with empty passphrase, got nil")
-	}
-}
-
-func TestEncrypt_EmptyPassphrase(t *testing.T) {
-	if _, err := Encrypt("", "value"); err == nil {
-		t.Fatal("expected error encrypting with empty passphrase, got nil")
-	}
-}
-
-func TestDecrypt_MissingPrefix(t *testing.T) {
-	// Valid base64 but no SECRET1; prefix.
-	payload := base64.StdEncoding.EncodeToString([]byte("just some bytes here padding padding"))
-	if _, err := Decrypt("key", payload); err == nil {
-		t.Fatal("expected error for missing prefix, got nil")
-	}
-}
-
-func TestDecrypt_InvalidBase64(t *testing.T) {
-	if _, err := Decrypt("key", magicPrefix+"!!!not base64!!!"); err == nil {
-		t.Fatal("expected error for invalid base64, got nil")
-	}
-}
-
-func TestDecrypt_TooShort(t *testing.T) {
-	short := base64.StdEncoding.EncodeToString([]byte("tiny"))
-	if _, err := Decrypt("key", magicPrefix+short); err == nil {
-		t.Fatal("expected error for too-short payload, got nil")
-	}
-}
-
-func TestDecrypt_TamperedCiphertext(t *testing.T) {
-	wire, err := Encrypt("key", "important secret")
-	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
-	}
-
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(wire, magicPrefix))
-	if err != nil {
-		t.Fatalf("decode failed: %v", err)
-	}
-	// Flip a bit in the ciphertext body (past salt+nonce). GCM must detect it.
-	raw[saltLen+nonceLen] ^= 0x01
-	tampered := magicPrefix + base64.StdEncoding.EncodeToString(raw)
-
-	if _, err := Decrypt("key", tampered); err == nil {
-		t.Fatal("expected error decrypting tampered ciphertext, got nil")
-	}
-}
-
-func TestEncrypt_UniqueSaltAndNonce(t *testing.T) {
-	// Same input twice must produce different wire values (random salt+nonce),
-	// yet both must decrypt back to the same plaintext.
-	a, err := Encrypt("key", "same input")
-	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
-	}
-	b, err := Encrypt("key", "same input")
-	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
-	}
-	if a == b {
-		t.Fatal("two encryptions of the same input produced identical output; salt/nonce not random")
-	}
-
-	for _, w := range []string{a, b} {
-		got, err := Decrypt("key", w)
-		if err != nil {
-			t.Fatalf("Decrypt failed: %v", err)
+func TestMethods_EmptyKey(t *testing.T) {
+	for _, m := range Methods() {
+		enc, _ := methodTestKeys(t, m)
+		wire := mustEncryptWith(t, m.Name(), enc, "value")
+		if _, err := Decrypt("", wire); err == nil {
+			t.Errorf("%s: decrypt with empty key succeeded", m.Name())
 		}
-		if got != "same input" {
-			t.Fatalf("got %q, want %q", got, "same input")
+		if _, err := Encrypt(m.Name(), "", "value"); err == nil {
+			t.Errorf("%s: encrypt with empty key succeeded", m.Name())
+		}
+	}
+}
+
+func TestMethods_TamperDetected(t *testing.T) {
+	for _, m := range Methods() {
+		t.Run(m.Name(), func(t *testing.T) {
+			enc, dec := methodTestKeys(t, m)
+			wire := mustEncryptWith(t, m.Name(), enc, "important secret")
+			raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(wire, m.Prefix()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw[len(raw)-1] ^= 0x01
+			tampered := m.Prefix() + base64.StdEncoding.EncodeToString(raw)
+			if _, err := Decrypt(dec, tampered); err == nil {
+				t.Fatal("tampered ciphertext decrypted successfully")
+			}
+		})
+	}
+}
+
+func TestMethods_Truncated(t *testing.T) {
+	for _, m := range Methods() {
+		enc, _ := methodTestKeys(t, m)
+		wire := mustEncryptWith(t, m.Name(), enc, "x")
+		short := m.Prefix() + base64.StdEncoding.EncodeToString([]byte("tiny"))
+		if err := ValidateCiphertext(short); err == nil {
+			t.Errorf("%s: truncated payload accepted", m.Name())
+		}
+		if err := ValidateCiphertext(wire[:len(m.Prefix())+3]); err == nil {
+			t.Errorf("%s: cut-off wire accepted", m.Name())
+		}
+	}
+}
+
+func TestMethods_NonDeterministic(t *testing.T) {
+	for _, m := range Methods() {
+		enc, _ := methodTestKeys(t, m)
+		a := mustEncryptWith(t, m.Name(), enc, "same input")
+		b := mustEncryptWith(t, m.Name(), enc, "same input")
+		if a == b {
+			t.Errorf("%s: two encryptions of the same input are identical", m.Name())
+		}
+	}
+}
+
+func TestMethods_ErrorsNeverContainKey(t *testing.T) {
+	const leaky = "my-very-secret-passphrase"
+	for _, m := range Methods() {
+		enc, _ := methodTestKeys(t, m)
+		wire := mustEncryptWith(t, m.Name(), enc, "v")
+		if _, err := Decrypt(leaky, wire); err != nil && strings.Contains(err.Error(), leaky) {
+			t.Errorf("%s: decrypt error leaks the key: %v", m.Name(), err)
+		}
+		if _, err := Encrypt(m.Name(), leaky, "v"); err != nil && strings.Contains(err.Error(), leaky) {
+			t.Errorf("%s: encrypt error leaks the key: %v", m.Name(), err)
+		}
+	}
+}
+
+func TestLegacySecret1PrefixStillDecrypts(t *testing.T) {
+	wire := mustEncryptWith(t, "aes256", testPassphrase, "old value")
+	legacy := "SECRET1;" + strings.TrimPrefix(wire, "AES256;")
+	got, err := Decrypt(testPassphrase, legacy)
+	if err != nil || got != "old value" {
+		t.Fatalf("legacy SECRET1 value: got %q, err %v", got, err)
+	}
+}
+
+func TestAge_PublicKeyCannotDecrypt(t *testing.T) {
+	secret, public, err := GenerateKey("age1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := mustEncryptWith(t, "age1", public, "value")
+	_, err = Decrypt(public, wire)
+	if err == nil || !strings.Contains(err.Error(), "PUBLIC key") || !strings.Contains(err.Error(), "AGE-SECRET-KEY-1") {
+		t.Fatalf("expected an explicit public-key error, got %v", err)
+	}
+	if got, err := Decrypt(secret, wire); err != nil || got != "value" {
+		t.Fatalf("private key: got %q, err %v", got, err)
+	}
+}
+
+func TestAge_MultipleRecipients(t *testing.T) {
+	s1, p1, _ := GenerateKey("age1")
+	s2, p2, _ := GenerateKey("age1")
+	wire := mustEncryptWith(t, "age1", p1+", "+p2, "shared")
+	for _, s := range []string{s1, s2} {
+		if got, err := Decrypt(s, wire); err != nil || got != "shared" {
+			t.Fatalf("recipient could not decrypt: %q %v", got, err)
+		}
+	}
+}
+
+func TestAge_GenkeyOutputUsableAsKey(t *testing.T) {
+	secret, public, _ := GenerateKey("age1")
+	file := "# public key: " + public + "\n" + secret + "\n" // what --genkey prints
+	wire := mustEncryptWith(t, "age1", file, "v")            // private key -> its public half
+	if got, err := Decrypt(file, wire); err != nil || got != "v" {
+		t.Fatalf("got %q, err %v", got, err)
+	}
+}
+
+func TestAge_PassphraseRejected(t *testing.T) {
+	_, err := Encrypt("age1", "just a passphrase", "v")
+	if err == nil || !strings.Contains(err.Error(), "not an age key") {
+		t.Fatalf("expected 'not an age key', got %v", err)
+	}
+}
+
+func TestSymmetric_AgeKeyRejected(t *testing.T) {
+	secret, public, _ := GenerateKey("age1")
+	for _, key := range []string{secret, public} {
+		_, err := Encrypt("aes256", key, "v")
+		if err == nil || !strings.Contains(err.Error(), "--method age1") {
+			t.Fatalf("expected a hint to use --method age1, got %v", err)
+		}
+		if strings.Contains(err.Error(), key) {
+			t.Fatal("error leaks the key")
+		}
+	}
+}
+
+func TestGenerateKey_Symmetric(t *testing.T) {
+	for _, name := range []string{"aes256", "xchacha20"} {
+		a, pubA, err := GenerateKey(name)
+		b, _, _ := GenerateKey(name)
+		if err != nil || len(a) < 40 || pubA != "" || a == b {
+			t.Errorf("%s: bad generated passphrase (len %d, public %q, err %v)", name, len(a), pubA, err)
 		}
 	}
 }
 
 func TestDecrypt_IgnoresWhitespaceAndWrapping(t *testing.T) {
-	wire, err := Encrypt("key", "KEY1=a\nKEY2=b\n")
-	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
-	}
+	wire := mustEncryptWith(t, "aes256", testPassphrase, "KEY1=a\nKEY2=b\n")
 	variants := map[string]string{
 		"trailing newline (file())": wire + "\n",
 		"crlf":                      wire + "\r\n",
@@ -152,22 +259,16 @@ func TestDecrypt_IgnoresWhitespaceAndWrapping(t *testing.T) {
 	}
 	for name, v := range variants {
 		t.Run(name, func(t *testing.T) {
-			got, err := Decrypt("key", v)
-			if err != nil {
-				t.Fatalf("Decrypt failed: %v", err)
-			}
-			if got != "KEY1=a\nKEY2=b\n" {
-				t.Fatalf("got %q", got)
+			got, err := Decrypt(testPassphrase, v)
+			if err != nil || got != "KEY1=a\nKEY2=b\n" {
+				t.Fatalf("got %q, err %v", got, err)
 			}
 		})
 	}
 }
 
 func TestWrapCiphertext(t *testing.T) {
-	wire, err := Encrypt("key", strings.Repeat("x", 200))
-	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
-	}
+	wire := mustEncryptWith(t, "aes256", testPassphrase, strings.Repeat("x", 200))
 	wrapped := WrapCiphertext(wire, 64)
 	for i, line := range strings.Split(wrapped, "\n") {
 		if len(line) > 64 {
@@ -183,29 +284,26 @@ func TestWrapCiphertext(t *testing.T) {
 }
 
 func TestEncrypt_RejectsInvalidUTF8(t *testing.T) {
-	if _, err := Encrypt("key", string([]byte{0xff, 0xfe, 0x00})); err == nil {
+	if _, err := Encrypt("aes256", "key", string([]byte{0xff, 0xfe, 0x00})); err == nil {
 		t.Fatal("expected error for non-UTF-8 plaintext, got nil")
 	}
 }
 
-func TestValidateCiphertext(t *testing.T) {
-	wire, err := Encrypt("key", "v")
-	if err != nil {
-		t.Fatalf("Encrypt failed: %v", err)
-	}
-	if err := ValidateCiphertext(wire); err != nil {
-		t.Fatalf("valid ciphertext rejected: %v", err)
-	}
-	for _, bad := range []string{"", "p@ssw0rd", magicPrefix, magicPrefix + "!!!", wire[:20]} {
+func TestValidateCiphertext_Malformed(t *testing.T) {
+	for _, bad := range []string{"", "p@ssw0rd", "AES256;", "AES256;!!!", "ROT13;YWJj", "no-prefix-at-all"} {
 		if err := ValidateCiphertext(bad); err == nil {
-			t.Errorf("expected %q to be rejected", bad)
+			t.Errorf("%q accepted", bad)
 		}
+	}
+	err := ValidateCiphertext("SUPERLONGUNKNOWNPREFIX-THAT-COULD-BE-A-PASSWORD;abc")
+	if err == nil || strings.Contains(err.Error(), "COULD-BE-A-PASSWORD") {
+		t.Fatalf("unknown prefix error should truncate the prefix, got %v", err)
 	}
 }
 
 func TestWriteOnlyVersion(t *testing.T) {
-	a, _ := Encrypt("key", "same")
-	b, _ := Encrypt("key", "same")
+	a := mustEncryptWith(t, "aes256", testPassphrase, "same")
+	b := mustEncryptWith(t, "aes256", testPassphrase, "same")
 
 	va := WriteOnlyVersion(a)
 	if va <= 0 || va >= 1<<53 {

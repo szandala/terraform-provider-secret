@@ -3,27 +3,34 @@
 page_title: "secret_secret Ephemeral Resource - terraform-provider-secret"
 subcategory: ""
 description: |-
-  Decrypts an AES-256-GCM encrypted value on-the-fly. The plaintext is ephemeral and never written to state or plan.
+  Decrypts a value encrypted with secret-encrypt (AES256, XCHACHA20 or AGE1; detected from the prefix) on-the-fly. The plaintext is ephemeral and never written to state or plan.
 ---
 
 # secret_secret (Ephemeral Resource)
 
-Decrypts an AES-256-GCM encrypted value on-the-fly. The plaintext is ephemeral and never written to state or plan.
+Decrypts a value encrypted with secret-encrypt (AES256, XCHACHA20 or AGE1; detected from the prefix) on-the-fly. The plaintext is ephemeral and never written to state or plan.
 
 ## Example Usage
 
 ```terraform
 # A single value, committed inline:
 ephemeral "secret_secret" "db_password" {
-  ciphertext  = "SECRET1;U2FsdGVk..."
-  secret_key  = "PROD_SECRET_KEY" # name of the env var, NOT the passphrase
+  ciphertext  = "AES256;U2FsdGVk..."
+  secret_key  = "PROD_SECRET_KEY" # name of the env var, NOT the key itself
   description = "Billing Postgres password"
 }
 
 # A whole file (e.g. a Django .env), encrypted with
-#   secret-encrypt -secret-key PROD_SECRET_KEY -in prod.env -out secrets/prod.env.enc -wrap 76
+#   secret-encrypt --secret-key PROD_SECRET_KEY --in prod.env --out secrets/prod.env.enc --wrap 76
 ephemeral "secret_secret" "django_env" {
   ciphertext = file("${path.module}/secrets/prod.env.enc")
+}
+
+# Asymmetric (age): encrypted with the public key only; the env var holds the
+# private key AGE-SECRET-KEY-1... The method is detected from the prefix.
+ephemeral "secret_secret" "stripe_key" {
+  ciphertext = "AGE1;YWdlLWVuY3J5cHRpb24ub3JnL3Yx..."
+  secret_key = "PROD_AGE_KEY"
 }
 ```
 
@@ -32,12 +39,12 @@ ephemeral "secret_secret" "django_env" {
 
 ### Required
 
-- `ciphertext` (String) The 'SECRET1;...' encrypted value. Safe to commit to your repository. Whitespace is ignored, so the value may be wrapped across lines or loaded with file().
+- `ciphertext` (String) The encrypted value, e.g. 'AES256;...' or 'AGE1;...'. Safe to commit to your repository. Whitespace is ignored, so the value may be wrapped across lines or loaded with file().
 
 ### Optional
 
 - `description` (String) Free-form note describing what this secret is for. Purely informational; does not affect decryption.
-- `secret_key` (String) Name of the environment variable that holds the passphrase for this secret (e.g. "PROD_SECRET_KEY"). Defaults to the provider's secret_key, which defaults to "SECRET_KEY".
+- `secret_key` (String) Name of the environment variable that holds the key for this secret (e.g. "PROD_SECRET_KEY"): the passphrase for AES256/XCHACHA20, the private key AGE-SECRET-KEY-1... for AGE1. Defaults to the provider's secret_key, which defaults to "SECRET_KEY".
 
 ### Read-Only
 

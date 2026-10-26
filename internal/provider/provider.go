@@ -47,13 +47,13 @@ func (p *secretProvider) Metadata(_ context.Context, _ provider.MetadataRequest,
 
 func (p *secretProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Commit AES-256-GCM encrypted secrets to your repo and decrypt them on-the-fly during plan/apply, " +
-			"ansible-vault style. The passphrase comes from an environment variable. Decrypted values are ephemeral " +
+		Description: "Commit encrypted secrets (AES-256, XChaCha20 or age) to your repo and decrypt them on-the-fly during plan/apply, " +
+			"ansible-vault style. The key comes from an environment variable. Decrypted values are ephemeral " +
 			"and never touch state or plan.",
 		Attributes: map[string]schema.Attribute{
 			"secret_key": schema.StringAttribute{
 				Optional: true,
-				Description: "Name of the environment variable holding the passphrase for every secret_secret that does " +
+				Description: "Name of the environment variable holding the key for every secret_secret that does " +
 					"not set its own secret_key. Defaults to \"SECRET_KEY\". Handy for one root module per environment, " +
 					"e.g. \"PROD_SECRET_KEY\" in the prod root.",
 				Validators: []validator.String{envVarNameValidator{}},

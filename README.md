@@ -10,11 +10,11 @@ An `ansible-vault`-style secrets mechanism for Terraform / OpenTofu.
 
 Requirements:
 
-| Feature                                   | Terraform | OpenTofu |
-| ----------------------------------------- | --------- | -------- |
-| `ephemeral "secret_secret"`               | >= 1.10   | >= 1.11  |
-| `provider::secret::wo_version()`          | >= 1.8    | >= 1.7   |
-| write-only `*_wo` sinks (e.g. GSM)        | >= 1.11   | >= 1.11  |
+| Feature                            | Terraform | OpenTofu |
+| ---------------------------------- | --------- | -------- |
+| `ephemeral "secret_secret"`        | >= 1.10   | >= 1.11  |
+| `provider::secret::wo_version()`   | >= 1.8    | >= 1.7   |
+| write-only `*_wo` sinks (e.g. GSM) | >= 1.11   | >= 1.11  |
 
 So in practice: **Terraform >= 1.11 or OpenTofu >= 1.11**.
 
@@ -24,49 +24,119 @@ So in practice: **Terraform >= 1.11 or OpenTofu >= 1.11**.
 
 ## How it works
 
-`ephemeral "secret_secret"` decrypts an `AES-256-GCM` value whose key is derived with
-`scrypt` from a passphrase held in an environment variable. The variable's **name**
-is chosen by `secret_key` on the secret, else `secret_key` on the provider block,
-else `SECRET_KEY`. Because it's an
-**ephemeral resource**, Terraform core guarantees the result is never serialized to
-state or the plan file - you don't fork core, you lean on the ephemeral value
-lifecycle already in core.
+`ephemeral "secret_secret"` decrypts a value produced by the `secret-encrypt`
+CLI. The key lives in an environment variable whose **name** is chosen by
+`secret_key` on the secret, else `secret_key` on the provider block, else
+`SECRET_KEY`. Because it's an **ephemeral resource**, Terraform core guarantees
+the result is never serialized to state or the plan file.
 
-## Wire format
+## Methods
+
+Every value starts with the name of the method that produced it, so one repo
+can mix methods and decryption picks the right one automatically:
 
 ```
-SECRET1;<base64( salt[16] || nonce[12] || ciphertext+GCMtag )>
+<METHOD>;<base64(payload)>
 ```
+
+| `--method`  | Prefix       | Kind       | Key env var holds                                                                | Details                                                                                                                            |
+| ----------- | ------------ | ---------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `aes256`    | `AES256;`    | symmetric  | passphrase (encrypt + decrypt)                                                   | AES-256-GCM, scrypt N=2^15 (32 MiB). **Default.**                                                                                  |
+| `xchacha20` | `XCHACHA20;` | symmetric  | passphrase (encrypt + decrypt)                                                   | XChaCha20-Poly1305, Argon2id t=3, 64 MiB, p=4 (RFC 9106). Harder to brute-force a weak passphrase; slower and more RAM per secret. |
+| `age1`      | `AGE1;`      | asymmetric | public key(s) `age1...` to encrypt, private key `AGE-SECRET-KEY-1...` to decrypt | [age](https://age-encryption.org) X25519. Developers can add secrets without being able to read any.                               |
+
+`SECRET1;` (earlier 0.x releases) is the old name of `AES256;` and still decrypts.
 
 Whitespace anywhere in the value is ignored, so it can be wrapped across lines
-(`-wrap 76`), indented in a heredoc, or loaded with `file()`.
+(`--wrap 76`), indented in a heredoc, or loaded with `file()`.
 
-## Encrypt values
+### Which one?
+
+- **`aes256`** - fine with a long random passphrase (`secret-encrypt --genkey`).
+- **`xchacha20`** - if the passphrase is something humans type. AES-256 itself
+  isn't the weak spot of `aes256`; the passphrase is, and Argon2id makes
+  guessing it more expensive.
+- **`age1`** - if people who *add* secrets shouldn't be able to *read* all of
+  them. The private key lives only in the Terraform workspace.
+
+## Install the CLI
+
+Download `secret-encrypt_<version>_<os>_<arch>` from the
+[GitHub releases](https://github.com/szandala/terraform-provider-secret/releases)
+(checksums in `secret-encrypt_<version>_SHA256SUMS`), or:
 
 ```sh
 go install github.com/szandala/terraform-provider-secret/cmd/secret-encrypt@latest
-# or: go build -o secret-encrypt ./cmd/secret-encrypt
-
-export SECRET_KEY='dev passphrase'
-
-# one value (ansible-vault encrypt_string). Prefer stdin: -value ends up in
-# your shell history and in `ps`.
-printf '%s' 'p@ssw0rd' | secret-encrypt
-# -> SECRET1;U2FsdGVk...
-
-# a whole file (ansible-vault encrypt), wrapped for readable diffs
-secret-encrypt -in prod.env -out secrets/prod.env.enc -wrap 76
-
-# look at it again / decrypt (ansible-vault view / decrypt)
-secret-encrypt -d -in secrets/prod.env.enc
-secret-encrypt -d -in secrets/prod.env.enc -out prod.env   # written 0600
-
-# a secret encrypted with a different key:
-export PROD_SECRET_KEY='prod passphrase'
-secret-encrypt -secret-key PROD_SECRET_KEY -in prod.env -out secrets/prod.env.enc
+secret-encrypt --help      # lists methods
+secret-encrypt --version
 ```
 
-Notes: `-in FILE` is byte-exact; stdin has exactly one trailing newline removed.
+### Or build CLI on your own
+```sh
+go build -o secret-encrypt ./cmd/secret-encrypt
+```
+
+
+
+## Encrypt values (symmetric)
+
+```sh
+secret-encrypt --genkey               # a strong random passphrase
+export SECRET_KEY='dev passphrase'
+
+# one value (ansible-vault encrypt_string). Prefer stdin: --value ends up in
+# your shell history and in `ps`.
+printf '%s' 'p@ssw0rd' | secret-encrypt                    # -> AES256;...
+printf '%s' 'p@ssw0rd' | secret-encrypt --method xchacha20 # -> XCHACHA20;...
+
+# a whole file (ansible-vault encrypt), wrapped for readable diffs
+secret-encrypt --in prod.env --out secrets/prod.env.enc --wrap 76
+
+# look at it again / decrypt (ansible-vault view / decrypt); method from prefix
+secret-encrypt -d --in secrets/prod.env.enc
+secret-encrypt -d --in secrets/prod.env.enc --out prod.env   # written 0600
+
+# a secret encrypted with a different key variable:
+export PROD_SECRET_KEY='prod passphrase'
+secret-encrypt --secret-key PROD_SECRET_KEY --in prod.env --out secrets/prod.env.enc
+```
+
+## Encrypt values (age, asymmetric)
+
+```sh
+# once, by whoever owns the environment:
+secret-encrypt --method age1 --genkey --out prod.agekey   # 0600
+#   Public key (share it, commit it): age1...
+# put the FULL content of prod.agekey into the TF workspace as a sensitive
+# env var, e.g. SECRET_KEY, then delete the local file.
+
+# anyone adding a secret - only the public key:
+export SECRET_KEY=age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+printf '%s' 'p@ssw0rd' | secret-encrypt --method age1      # -> AGE1;...
+
+# several recipients (e.g. TF workspace + SecOps break-glass key):
+export SECRET_KEY='age1...workspace, age1...secops'
+
+# decrypting needs the private key; with only a public key you get:
+#   error: ... the key is an age PUBLIC key (age1...): it can only encrypt.
+#   Decryption needs the PRIVATE key (AGE-SECRET-KEY-1...)
+```
+
+The key variable may contain several keys separated by spaces, commas or
+newlines; lines starting with `#` are ignored, so a `--genkey` file can be used
+as is (for encryption its public half is used).
+
+## Adding a new method
+
+Copy `internal/provider/method_template_symmetric.go` or
+`method_template_asymmetric.go` to `method_<name>.go`, follow the steps at the
+top of the file, and add a case to `methodTestKeys` in `crypto_test.go`. The
+generic tests (round trip, wrong key, tampering, truncation, no key in error
+messages) then run for the new method automatically, and the CLI lists it in
+`--help`. Never change a released method's payload or KDF parameters - add a
+new method (or keep the old prefix via `registerMethod(m, "OLD;")`).
+
+Notes: `--in FILE` is byte-exact; stdin has exactly one trailing newline removed.
 Plaintext must be UTF-8 (base64-encode binary first). Keep the decrypted files
 out of git (`*.env` in `.gitignore`, commit only `*.env.enc`).
 
@@ -85,12 +155,12 @@ provider "secret" {
 }
 
 ephemeral "secret_secret" "db_password" {
-  ciphertext = "SECRET1;U2FsdGVk..."
+  ciphertext = "AES256;U2FsdGVk..."
 }
 
 # A secret can still pick its own key:
 ephemeral "secret_secret" "billing_api_key" {
-  ciphertext  = "SECRET1;Zm9vYmFy..."
+  ciphertext  = "AES256;Zm9vYmFy..."
   secret_key  = "BILLING_SECRET_KEY"
   description = "Billing service API key"
 }
@@ -110,7 +180,7 @@ terraform plan    # and apply: the variables are needed in both
 
 If a referenced env var is unset, plan fails with a clear error naming that
 variable, instead of leaking anything. `secret_key` must be a variable **name**;
-if it isn't (e.g. someone pasted the passphrase there), `terraform validate`
+if it isn't (e.g. someone pasted the key there), `terraform validate`
 rejects it without printing the value.
 
 ## Recipe: Google Secret Manager, one root module per environment
@@ -168,8 +238,8 @@ reviewable key by key.
 
 ```yaml
 # secrets/prod.yaml
-DB_PASSWORD: SECRET1;AAAA...
-STRIPE_API_KEY: SECRET1;BBBB...
+DB_PASSWORD: AES256;AAAA...
+STRIPE_API_KEY: AGE1;BBBB...   # methods can be mixed
 ```
 
 ```hcl
@@ -250,7 +320,7 @@ resource "google_secret_manager_secret" "db" {
 }
 
 locals {
-  db_password_ct = "SECRET1;U2FsdGVk..."
+  db_password_ct = "AES256;U2FsdGVk..."
 }
 
 ephemeral "secret_secret" "db_password" {
@@ -338,15 +408,17 @@ own IAM identity. Terraform state never sees the cleartext at any step.
 
 ## Security notes
 
-- **The passphrase is the whole security.** Use a long random one per environment
-  (`openssl rand -base64 32`) and keep it in your CI's secret store / a password
-  manager. scrypt slows brute force down; it can't save `prod123`.
+- **The key is the whole security.** Use a long random passphrase per
+  environment (`secret-encrypt --genkey`) or an age key pair, and keep it in
+  your CI's secret store / a password manager. scrypt/Argon2id slow brute force
+  down; they can't save `prod123`.
 - **Rotating the passphrase** = decrypt and re-encrypt every file with the new
   one. The old ciphertexts stay in git history, so if a passphrase leaks, rotate
   the *secrets* themselves, not only the passphrase.
-- Each decryption runs scrypt (N=2^15, ~32 MiB, tens of ms) during both plan and
-  apply. Hundreds of individual secrets add up - prefer a few files over many
-  tiny values.
+- Each symmetric decryption runs the KDF during both plan and apply: scrypt
+  (~32 MiB, tens of ms) for `aes256`, Argon2id (~64 MiB, more CPU) for
+  `xchacha20`. With Terraform's default parallelism of 10 that is up to
+  ~640 MiB for `xchacha20`. age decryption is cheap.
 - The plaintext is held in provider process memory during the run, like with
   any provider.
 
@@ -354,8 +426,8 @@ own IAM identity. Terraform state never sees the cleartext at any step.
 
 | Sink                                     | Safe? | Why                                                                             |
 | ---------------------------------------- | ----- | ------------------------------------------------------------------------------- |
-| `*_wo` argument (e.g. `secret_data_wo`)  | ✅    | Not persisted to state                                                          |
-| Provider config (e.g. DB `password`)     | ✅    | Ephemeral-aware, not persisted                                                  |
-| Another ephemeral resource / local       | ✅    | Stays ephemeral                                                                 |
-| Ordinary attribute (most fields)         | ❌    | Terraform errors; would otherwise leak to state                                 |
-| VM startup script / user-data / metadata | ❌    | Cleartext at the cloud destination anyway - have the VM pull the secret instead |
+| `*_wo` argument (e.g. `secret_data_wo`)  | ✅     | Not persisted to state                                                          |
+| Provider config (e.g. DB `password`)     | ✅     | Ephemeral-aware, not persisted                                                  |
+| Another ephemeral resource / local       | ✅     | Stays ephemeral                                                                 |
+| Ordinary attribute (most fields)         | ❌     | Terraform errors; would otherwise leak to state                                 |
+| VM startup script / user-data / metadata | ❌     | Cleartext at the cloud destination anyway - have the VM pull the secret instead |

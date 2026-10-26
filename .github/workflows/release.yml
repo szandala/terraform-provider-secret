@@ -2,15 +2,11 @@
 # https://github.com/hashicorp/terraform-provider-scaffolding-framework/blob/main/.github/workflows/release.yml
 name: Release
 
-# This GitHub action creates a release when a tag that matches the pattern
-# "v*" (e.g. v0.1.0) is created.
 on:
   push:
     tags:
       - "v*"
 
-# Releases need permissions to read and write the repository contents.
-# GitHub considers creating releases and uploading assets as writing contents.
 permissions:
   contents: write
 
@@ -37,6 +33,18 @@ jobs:
         with:
           args: release --clean
         env:
-          # GitHub sets the GITHUB_TOKEN secret automatically.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+      # The CLI archives are uploaded by GoReleaser but kept out of the
+      # provider's SHA256SUMS (Registry input). Give them their own checksums.
+      - name: Upload secret-encrypt checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cd dist
+          sums="secret-encrypt_${version}_SHA256SUMS"
+          sha256sum secret-encrypt_"${version}"_*.tar.gz secret-encrypt_"${version}"_*.zip > "$sums"
+          cat "$sums"
+          gh release upload "$GITHUB_REF_NAME" "$sums" --clobber

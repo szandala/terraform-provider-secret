@@ -1,6 +1,6 @@
 # Binaries
-terraform-provider-secret
-secret-encrypt
+/terraform-provider-secret
+/secret-encrypt
 *.exe
 
 # GoReleaser output

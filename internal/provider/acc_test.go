@@ -46,7 +46,7 @@ func mergeFactories(a, b map[string]func() (tfprotov6.ProviderServer, error)) ma
 
 func mustEncrypt(t *testing.T, passphrase, plaintext string) string {
 	t.Helper()
-	wire, err := Encrypt(passphrase, plaintext)
+	wire, err := Encrypt(DefaultMethod, passphrase, plaintext)
 	if err != nil {
 		t.Fatalf("failed to encrypt test fixture: %v", err)
 	}
@@ -327,5 +327,68 @@ output "v" {
 				},
 			},
 		},
+	})
+}
+
+// AGE1: the env var holds the private key; the ciphertext was produced with
+// the public key only. Also checks that a public key in the env var gives an
+// explicit error.
+func TestAcc_AgeMethod(t *testing.T) {
+	secret, public, err := GenerateKey("age1")
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	const value = "age-protected"
+	ct, err := Encrypt("age1", public, value)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	config := fmt.Sprintf(`
+ephemeral "secret_secret" "test" {
+  ciphertext = %q
+  secret_key = "AGE_KEY"
+}
+
+provider "echo" {
+  data = ephemeral.secret_secret.test.plaintext
+}
+
+resource "echo" "test" {}
+`, ct)
+
+	t.Run("private key decrypts", func(t *testing.T) {
+		t.Setenv("AGE_KEY", secret)
+		resource.UnitTest(t, resource.TestCase{
+			TerraformVersionChecks: []tfversion.TerraformVersionCheck{
+				tfversion.SkipBelow(tfversion.Version1_10_0),
+			},
+			ProtoV6ProviderFactories: mergeFactories(protoV6ProviderFactories, echoFactory),
+			Steps: []resource.TestStep{
+				{
+					Config: config,
+					ConfigStateChecks: []statecheck.StateCheck{
+						statecheck.ExpectKnownValue("echo.test", tfjsonpath.New("data"),
+							knownvalue.StringExact(value)),
+					},
+				},
+			},
+		})
+	})
+
+	t.Run("public key is rejected with a clear error", func(t *testing.T) {
+		t.Setenv("AGE_KEY", public)
+		resource.UnitTest(t, resource.TestCase{
+			TerraformVersionChecks: []tfversion.TerraformVersionCheck{
+				tfversion.SkipBelow(tfversion.Version1_10_0),
+			},
+			ProtoV6ProviderFactories: mergeFactories(protoV6ProviderFactories, echoFactory),
+			Steps: []resource.TestStep{
+				{
+					Config:      config,
+					ExpectError: regexp.MustCompile(`PUBLIC\s+key`),
+				},
+			},
+		})
 	})
 }

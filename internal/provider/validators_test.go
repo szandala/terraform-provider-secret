@@ -46,7 +46,7 @@ func TestEnvVarNameValidator(t *testing.T) {
 }
 
 func TestCiphertextValidator(t *testing.T) {
-	wire, err := Encrypt("key", "value")
+	wire, err := Encrypt("aes256", "key", "value")
 	if err != nil {
 		t.Fatalf("Encrypt failed: %v", err)
 	}
