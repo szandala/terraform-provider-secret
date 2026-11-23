@@ -18,10 +18,6 @@ Requirements:
 
 So in practice: **Terraform >= 1.11 or OpenTofu >= 1.11**.
 
-> **0.x note:** the ephemeral resource was renamed from `secret` to
-> `secret_secret`. Ephemeral resources have no state, so migrating is just a
-> rename in your `.tf` files - see [CHANGELOG.md](CHANGELOG.md).
-
 ## How it works
 
 `ephemeral "secret_secret"` decrypts a value produced by the `secret-encrypt`
@@ -86,8 +82,8 @@ export SECRET_KEY='dev passphrase'
 
 # one value (ansible-vault encrypt_string). Prefer stdin: --value ends up in
 # your shell history and in `ps`.
-printf '%s' 'p@ssw0rd' | secret-encrypt                    # -> AES256;...
-printf '%s' 'p@ssw0rd' | secret-encrypt --method xchacha20 # -> XCHACHA20;...
+echo -n 'p@ssw0rd' | secret-encrypt                    # -> AES256;...
+echo -n 'p@ssw0rd' | secret-encrypt --method xchacha20 # -> XCHACHA20;...
 
 # a whole file (ansible-vault encrypt), wrapped for readable diffs
 secret-encrypt --in prod.env --out secrets/prod.env.enc --wrap 76
@@ -95,6 +91,9 @@ secret-encrypt --in prod.env --out secrets/prod.env.enc --wrap 76
 # look at it again / decrypt (ansible-vault view / decrypt); method from prefix
 secret-encrypt -d --in secrets/prod.env.enc
 secret-encrypt -d --in secrets/prod.env.enc --out prod.env   # written 0600
+# an existing --out file is only overwritten after you confirm on the terminal
+# (no terminal, e.g. CI: it fails); --force skips the question. --out equal to
+# --in (in-place) never asks.
 
 # a secret encrypted with a different key variable:
 export PROD_SECRET_KEY='prod passphrase'
@@ -112,7 +111,7 @@ secret-encrypt --method age1 --genkey --out prod.agekey   # 0600
 
 # anyone adding a secret - only the public key:
 export SECRET_KEY=age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
-printf '%s' 'p@ssw0rd' | secret-encrypt --method age1      # -> AGE1;...
+echo -n 'p@ssw0rd' | secret-encrypt --method age1      # -> AGE1;...
 
 # several recipients (e.g. TF workspace + SecOps break-glass key):
 export SECRET_KEY='age1...workspace, age1...secops'

@@ -1,8 +1,24 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 - 2026-11-23
+
+First stable release. From here on, semantic versioning applies to:
+
+- the `secret_secret` ephemeral resource and the `provider::secret::wo_version`
+  function (names, arguments),
+- the wire format: prefixes (`AES256;`, `XCHACHA20;`, `AGE1;`, legacy `SECRET1;`),
+  payload layouts and KDF parameters. Released methods are never changed; a new
+  scheme is a new method,
+- the value of `wo_version` for a given ciphertext,
+- the `secret-encrypt` command-line flags.
 
 ### Added
+
+- `secret-encrypt` asks before overwriting an existing `--out` file. The answer
+  is read from the terminal; without one (e.g. CI) the command fails and points
+  to the new `--force` flag, which skips the question. `--out` equal to `--in`
+  (in-place) never asks.
+- `LICENSE` (MIT) and `SECURITY.md` (how to report vulnerabilities).
 
 - Pluggable encryption methods, chosen with `secret-encrypt --method` and
   detected from the ciphertext prefix when decrypting:
@@ -29,6 +45,13 @@
 - New dependency: `filippo.io/age`.
 - `.gitignore`: binaries are ignored only in the repo root (the old pattern
   also matched the `cmd/secret-encrypt/` directory).
+
+### Fixed
+
+- `secret-encrypt -d --out` and `--genkey --out` no longer leave an existing,
+  more permissive file (e.g. 0644) world-readable: the file is restricted to
+  0600 before the decrypted value or private key is written. Stricter existing
+  permissions are kept.
 
 ## 0.x - rename to secret_secret
 

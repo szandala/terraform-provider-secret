@@ -24,6 +24,8 @@
 package main
 
 import (
+	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -71,6 +73,7 @@ func run() error {
 	in := flag.String("in", "", "read input from this file instead of stdin; file contents are used byte-for-byte")
 	out := flag.String("out", "", "write output to this file instead of stdout (may be the same as --in)")
 	wrap := flag.Int("wrap", 0, "wrap ciphertext at N columns, e.g. 76 for files committed to git (0 = one line)")
+	force := flag.Bool("force", false, "overwrite an existing --out file without asking (otherwise asks on the terminal; fails if there is none)")
 	decrypt := flag.Bool("d", false, "decrypt instead of encrypt")
 	genkey := flag.Bool("genkey", false, "print a new random key for --method (age1: private key + public key comment) and exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -88,6 +91,9 @@ func run() error {
 	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
 	if *genkey {
+		if err := confirmOverwrite(*out, "", *force); err != nil {
+			return err
+		}
 		return generate(*method, *out)
 	}
 	if set["value"] && *in != "" {
@@ -95,6 +101,11 @@ func run() error {
 	}
 	if set["value"] && *decrypt {
 		return fmt.Errorf("--value cannot be used with -d; pass the ciphertext via stdin or --in")
+	}
+
+	// Ask before doing any (slow) work, and before stdin is consumed.
+	if err := confirmOverwrite(*out, *in, *force); err != nil {
+		return err
 	}
 
 	key, ok := os.LookupEnv(*secretKey)
@@ -170,10 +181,69 @@ func readInput(valueSet bool, value, in string) (string, error) {
 	return strings.TrimSuffix(s, "\n"), nil
 }
 
+// confirmOverwrite asks before an existing regular file is overwritten by --out.
+// It is skipped with --force, for stdout, for a file that does not exist yet,
+// and when --out is the same file as --in (the in-place workflow, like
+// `ansible-vault encrypt`). The answer is read from the terminal (/dev/tty), not
+// stdin, because stdin may carry the input. Without a terminal it fails and
+// points to --force instead of overwriting silently.
+func confirmOverwrite(out, in string, force bool) error {
+	if force || out == "" || out == "-" {
+		return nil
+	}
+	fi, err := os.Stat(out)
+	if err != nil || !fi.Mode().IsRegular() {
+		return nil // nothing to lose (or the write itself will report the problem)
+	}
+	if in != "" && in != "-" {
+		if inFi, err := os.Stat(in); err == nil && os.SameFile(fi, inFi) {
+			return nil
+		}
+	}
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		return fmt.Errorf("%s already exists; pass --force to overwrite it", out)
+	}
+	defer tty.Close()
+	fmt.Fprintf(os.Stderr, "%s already exists. Overwrite? [y/N] ", out)
+	answer, _ := bufio.NewReader(tty).ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return nil
+	}
+	return errors.New("aborted, " + out + " was not changed")
+}
+
 func emit(path, content string, perm os.FileMode) error {
 	if path == "" || path == "-" {
 		_, err := io.WriteString(os.Stdout, content)
 		return err
 	}
-	return os.WriteFile(path, []byte(content), perm)
+	return writeFile(path, []byte(content), perm)
+}
+
+// writeFile is os.WriteFile that also guarantees an existing file is never
+// MORE permissive than perm: os.WriteFile applies perm only when it creates the
+// file, so overwriting an existing 0644 file with a decrypted value or a
+// private key would leave it world-readable. Extra bits are removed before any
+// content is written; bits are never added, so a stricter existing file stays
+// as it is.
+func writeFile(path string, data []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if fi, err := f.Stat(); err == nil && fi.Mode().IsRegular() {
+		if mode := fi.Mode().Perm(); mode&^perm != 0 {
+			if err := f.Chmod(mode & perm); err != nil {
+				f.Close()
+				return err
+			}
+		}
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
