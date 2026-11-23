@@ -95,6 +95,9 @@ secret-encrypt --in prod.env --out secrets/prod.env.enc --wrap 76
 # look at it again / decrypt (ansible-vault view / decrypt); method from prefix
 secret-encrypt -d --in secrets/prod.env.enc
 secret-encrypt -d --in secrets/prod.env.enc --out prod.env   # written 0600
+# an existing --out file is only overwritten after you confirm on the terminal
+# (no terminal, e.g. CI: it fails); --force skips the question. --out equal to
+# --in (in-place) never asks.
 
 # a secret encrypted with a different key variable:
 export PROD_SECRET_KEY='prod passphrase'
