@@ -59,11 +59,11 @@ func TestConfirmOverwrite_NoQuestionNeeded(t *testing.T) {
 	}
 
 	cases := map[string]struct{ out, in string }{
-		"no --out":           {"", ""},
-		"stdout":             {"-", ""},
+		"no --out":            {"", ""},
+		"stdout":              {"-", ""},
 		"file does not exist": {filepath.Join(dir, "new"), ""},
-		"directory":          {dir, ""},
-		"in-place (out==in)": {existing, existing},
+		"directory":           {dir, ""},
+		"in-place (out==in)":  {existing, existing},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
